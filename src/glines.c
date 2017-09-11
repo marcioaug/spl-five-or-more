@@ -58,6 +58,9 @@
 #define DEFAULT_GAME_SIZE MEDIUM
 #define DEFAULT_BALL_THEME "balls.svg"
 
+#define PREVIEW_IMAGE_WIDTH 20
+#define PREVIEW_IMAGE_HEIGHT 20
+
 enum {
   UNSET = 0,
   SMALL = 1,
@@ -110,6 +113,9 @@ static cairo_surface_t *ball_surface = NULL;
 /* The balls rendered to a size appropriate for the preview. */
 static cairo_surface_t *preview_surfaces[7] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL };
 
+static GtkImage* preview_images[MAXNPIECES];
+static GdkPixbuf* preview_pixbufs[MAXNPIECES];
+
 /* A cairo_surface_t of a blank tile. */
 static cairo_surface_t *blank_surface = NULL;
 static cairo_surface_t *blank_preview_surface = NULL;
@@ -125,9 +131,6 @@ static int cursor_y = MAXFIELDSIZE / 2;
 static gboolean show_cursor = FALSE;
 
 static int boxsize;
-
-static int preview_height = 0;
-static int preview_width = 0;
 
 static int move_timeout = 100;
 static int animate_id = 0;
@@ -292,13 +295,13 @@ refresh_preview_surfaces (void)
 
   /* Like the refresh_pixmaps() function, we may be called before
    * the window is ready. */
-  if (preview_height == 0)
+  if (PREVIEW_IMAGE_HEIGHT == 0)
     return;
 
   preview_rect.x = 0;
   preview_rect.y = 0;
-  preview_rect.width = preview_width;
-  preview_rect.height = preview_height;
+  preview_rect.width = PREVIEW_IMAGE_WIDTH;
+  preview_rect.height = PREVIEW_IMAGE_HEIGHT;
 
   /* We create pixmaps for each of the ball colours and then
    * set them as the background for each widget in the preview array.
@@ -309,26 +312,32 @@ refresh_preview_surfaces (void)
       cairo_surface_destroy (preview_surfaces[i]);
 
   if (ball_preimage)
-    scaled = games_preimage_render (ball_preimage, 4 * preview_width,
-                                    7 * preview_height);
+    scaled = games_preimage_render (ball_preimage, 4 * PREVIEW_IMAGE_WIDTH,
+                                    7 * PREVIEW_IMAGE_HEIGHT);
 
   if (!scaled) {
     scaled = gdk_pixbuf_new (GDK_COLORSPACE_RGB, TRUE, 8,
-                             4 * preview_width, 7 * preview_height);
+                             4 * PREVIEW_IMAGE_WIDTH, 7 * PREVIEW_IMAGE_HEIGHT);
     gdk_pixbuf_fill (scaled, 0x00000000);
   }
 
   for (i = 0; i < 7; i++) {
     preview_surfaces[i] = gdk_window_create_similar_surface (gtk_widget_get_window (widget),
                                                              CAIRO_CONTENT_COLOR_ALPHA,
-                                                             preview_width, preview_height);
+                                                             PREVIEW_IMAGE_WIDTH, PREVIEW_IMAGE_HEIGHT);
     cr = cairo_create (preview_surfaces[i]);
     gdk_cairo_set_source_rgba (cr, &bg);
     gdk_cairo_rectangle (cr, &preview_rect);
     cairo_fill (cr);
 
-    gdk_cairo_set_source_pixbuf (cr, scaled, 0, -1.0 * preview_height * i);
+    gdk_cairo_set_source_pixbuf (cr, scaled, 0, -1.0 * PREVIEW_IMAGE_HEIGHT * i);
     cairo_mask (cr, cairo_get_source (cr));
+
+    if (preview_pixbufs[i])
+      g_object_unref (preview_pixbufs[i]);
+
+    preview_pixbufs[i] = gdk_pixbuf_get_from_surface (preview_surfaces[i], 0, 0,
+                                                      PREVIEW_IMAGE_WIDTH, PREVIEW_IMAGE_HEIGHT);
 
     cairo_destroy (cr);
   }
@@ -338,7 +347,7 @@ refresh_preview_surfaces (void)
 
   blank_preview_surface = gdk_window_create_similar_surface (gtk_widget_get_window (widget),
                                                              CAIRO_CONTENT_COLOR_ALPHA,
-                                                             preview_width, preview_height);
+                                                             PREVIEW_IMAGE_WIDTH, PREVIEW_IMAGE_HEIGHT);
   cr = cairo_create (blank_preview_surface);
   gdk_cairo_set_source_rgba (cr, &bg);
   gdk_cairo_rectangle (cr, &preview_rect);
@@ -438,19 +447,16 @@ void
 draw_preview (void)
 {
   guint i;
-  cairo_pattern_t *pattern;
+
+  if (!GTK_IS_IMAGE (preview_images[0]))
+    return;
 
   for (i = 0; i < MAXNPIECES; i++) {
-
     if (i < npieces)
-      pattern = cairo_pattern_create_for_surface (preview_surfaces[preview[i] - 1]);
+      gtk_image_set_from_pixbuf (preview_images[i],
+                                 preview_pixbufs[preview[i] - 1]);
     else
-      pattern = cairo_pattern_create_for_surface (blank_preview_surface);
-
-    gdk_window_set_background_pattern (gtk_widget_get_window (preview_widgets[i]),
-                                       pattern);
-    cairo_pattern_destroy (pattern);
-    gtk_widget_queue_draw (preview_widgets[i]);
+      gtk_image_clear (preview_images[i]);
   }
 }
 
@@ -1435,9 +1441,6 @@ game_help_callback (GtkAction * action, gpointer data)
 static int
 preview_configure_cb (GtkWidget * widget, GdkEventConfigure * event)
 {
-  preview_width = event->width;
-  preview_height = event->height;
-
   refresh_preview_surfaces ();
 
   draw_preview ();
@@ -1582,6 +1585,10 @@ startup_cb (GApplication *application)
      * we only hook into one of the configure events. */
     /* Yes, this is an evil hack. */
     gtk_widget_realize (preview_widgets[i]);
+
+    preview_images[i] = GTK_IMAGE (gtk_image_new ());
+    gtk_box_pack_start (GTK_BOX (preview_hbox ),
+                        GTK_WIDGET (preview_images[i]), FALSE, FALSE, 0);
   }
   g_signal_connect (preview_widgets[0], "configure-event",
                     G_CALLBACK (preview_configure_cb), NULL);
